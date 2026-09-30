@@ -1,0 +1,4 @@
+export type MediaMeta={takenDateTime?:string|null;createdDateTime?:string|null;accountId:string;parentPath?:string|null;name:string};
+export type AlbumRule={daysOfWeek?:number[];dateFrom?:string;dateTo?:string;accountIds?:string[];pathIncludes?:string;nameIncludes?:string};
+export function mediaDate(m:MediaMeta){return new Date(m.takenDateTime||m.createdDateTime||0)}
+export function matchesRule(m:MediaMeta,r:AlbumRule){const d=mediaDate(m);if(Number.isNaN(d.getTime()))return false;if(r.daysOfWeek?.length&&!r.daysOfWeek.includes(d.getDay()))return false;if(r.dateFrom&&d<new Date(`${r.dateFrom}T00:00:00`))return false;if(r.dateTo&&d>new Date(`${r.dateTo}T23:59:59.999`))return false;if(r.accountIds?.length&&!r.accountIds.includes(m.accountId))return false;if(r.pathIncludes&&!String(m.parentPath||'').toLowerCase().includes(r.pathIncludes.toLowerCase()))return false;if(r.nameIncludes&&!m.name.toLowerCase().includes(r.nameIncludes.toLowerCase()))return false;return true}

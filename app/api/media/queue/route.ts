@@ -1,0 +1,2 @@
+import { NextRequest, NextResponse } from 'next/server'; import { listFolderPhotos } from '@/lib/msgraph';
+export async function GET(req:NextRequest){try{const account=req.nextUrl.searchParams.get('account');const folder=req.nextUrl.searchParams.get('folder')||'root';if(!account)return NextResponse.json({error:'account required'},{status:400});const items=await listFolderPhotos(account,folder);return NextResponse.json({items})}catch(e){return NextResponse.json({error:e instanceof Error?e.message:'error'},{status:500})}}

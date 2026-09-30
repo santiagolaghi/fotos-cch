@@ -1,0 +1,9 @@
+{
+  "name": "Culto Media",
+  "short_name": "Culto Media",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b0d12",
+  "theme_color": "#0b0d12",
+  "description": "Curá, organizá y descargá fotos de OneDrive con swipes rápidos."
+}

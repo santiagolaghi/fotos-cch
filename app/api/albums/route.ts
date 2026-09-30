@@ -1,0 +1,3 @@
+import { NextRequest, NextResponse } from 'next/server'; import { supabaseAdmin } from '@/lib/supabase-admin';
+export async function GET(){const {data,error}=await supabaseAdmin().from('virtual_albums').select('*').order('created_at',{ascending:false});return error?NextResponse.json({error:error.message},{status:500}):NextResponse.json(data)}
+export async function POST(req:NextRequest){const b=await req.json();const {data,error}=await supabaseAdmin().from('virtual_albums').insert({name:b.name,rule:b.rule||{},is_smart:!!b.isSmart}).select().single();return error?NextResponse.json({error:error.message},{status:500}):NextResponse.json(data,{status:201})}
