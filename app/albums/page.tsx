@@ -1,37 +1,23 @@
 'use client';
 
 import Link from 'next/link';
-import { CalendarDays, ChevronLeft, Images, Loader2, PlaySquare, Sparkles, Users } from 'lucide-react';
+import { ChevronLeft, Images, Loader2, Sparkles, Users } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
-type MediaKind='image'|'video';
-type CatalogItem={
+type Album={id:string;name:string;childCount:number;coverImageItemId?:string|null};
+type AccountGroup={
   id:string;
-  name:string;
-  takenDateTime?:string|null;
-  createdDateTime?:string;
-  lastModifiedDateTime?:string;
-  kind:MediaKind;
-  accountId:string;
-  account:string;
+  slot:number;
+  display_name:string|null;
+  email:string|null;
+  drive_type:string|null;
+  albumsSupported:boolean;
+  albums:Album[];
 };
-type CatalogResponse={items?:CatalogItem[];error?:string};
-type Album={key:string;name:string;rule:string;items:CatalogItem[]};
-
-function dateKey(value?:string|null){
-  if(!value)return '';
-  const d=new Date(value);
-  if(Number.isNaN(d.getTime()))return '';
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-}
-function prettyDate(key:string){
-  const [y,m,d]=key.split('-').map(Number);
-  return new Date(y,m-1,d).toLocaleDateString('es-AR',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
-}
+type ResponseShape={accounts?:AccountGroup[];error?:string};
 
 export default function Albums(){
-  const [items,setItems]=useState<CatalogItem[]>([]);
-  const [kind,setKind]=useState<MediaKind>('image');
+  const [groups,setGroups]=useState<AccountGroup[]>([]);
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState<string|null>(null);
 
@@ -39,67 +25,45 @@ export default function Albums(){
     void (async()=>{
       try{
         setLoading(true); setError(null);
-        const r=await fetch('/api/media/catalog?limit=2500');
-        const j=await r.json() as CatalogResponse;
-        if(!r.ok)throw new Error(j.error||'No se pudo cargar la biblioteca');
-        setItems(j.items||[]);
-      }catch(e){setError(e instanceof Error?e.message:'Error cargando biblioteca');}
+        const r=await fetch('/api/onedrive/albums',{cache:'no-store'});
+        const j=await r.json() as ResponseShape;
+        if(!r.ok)throw new Error(j.error||'No se pudieron cargar los álbumes');
+        setGroups(j.accounts||[]);
+      }catch(e){setError(e instanceof Error?e.message:'Error cargando álbumes');}
       finally{setLoading(false);}
     })();
   },[]);
 
-  const filtered=useMemo(()=>items.filter(x=>x.kind===kind),[items,kind]);
-  const albums=useMemo<Album[]>(()=>{
-    if(!filtered.length)return [];
-    const out:Album[]=[];
-    out.push({key:'all',name:kind==='image'?'Todas las fotos':'Todos los videos',rule:'Toda la biblioteca',items:filtered});
-
-    const wed=filtered.filter(x=>x.takenDateTime&&new Date(x.takenDateTime).getDay()===3);
-    if(wed.length)out.push({key:'day:3',name:'Miércoles',rule:'Día de semana = miércoles',items:wed});
-    const sun=filtered.filter(x=>x.takenDateTime&&new Date(x.takenDateTime).getDay()===0);
-    if(sun.length)out.push({key:'day:0',name:'Domingos',rule:'Día de semana = domingo',items:sun});
-
-    const dates=new Map<string,CatalogItem[]>();
-    for(const item of filtered){
-      const k=dateKey(item.takenDateTime||item.createdDateTime||item.lastModifiedDateTime);
-      if(!k)continue;
-      const arr=dates.get(k)||[]; arr.push(item); dates.set(k,arr);
-    }
-    [...dates.entries()].sort((a,b)=>b[0].localeCompare(a[0])).slice(0,8).forEach(([key,dateItems])=>{
-      out.push({key:`date:${key}`,name:prettyDate(key),rule:'Fecha de captura',items:dateItems});
-    });
-    return out;
-  },[filtered,kind]);
+  const total=useMemo(()=>groups.reduce((n,g)=>n+g.albums.length,0),[groups]);
 
   return <main className="albumShell">
-    <header className="topbar"><Link href="/"><ChevronLeft/></Link><div><strong>Álbumes</strong><small>elegí primero qué querés revisar</small></div><span/></header>
+    <header className="topbar"><Link href="/"><ChevronLeft/></Link><div><strong>Álbumes de OneDrive</strong><small>tocá uno para empezar</small></div><span/></header>
 
-    <section className="mediaTabs" aria-label="Tipo de contenido">
-      <button className={kind==='image'?'active':''} onClick={()=>setKind('image')}><Images/> Fotos</button>
-      <button className={kind==='video'?'active':''} onClick={()=>setKind('video')}><PlaySquare/> Videos</button>
-    </section>
+    <section className="realAlbumSummary"><div><strong>{loading?'…':total} álbumes reales</strong><div>Traídos directamente de OneDrive, no inventados por fecha.</div></div><Images/></section>
 
-    <section className="smartBanner"><Sparkles/><div><strong>Álbumes inteligentes</strong><p>Se arman con las fechas reales de OneDrive. Ya no se mezclan fotos y videos.</p></div></section>
+    <section className="peopleBanner"><Users/><div><strong>Personas</strong><p>La sección “Personas” de OneDrive no está disponible en Microsoft Graph. La voy a resolver como agrupación propia por rostros, sin depender de OneDrive.</p></div><em>pendiente</em></section>
 
-    <section className="peopleBanner"><Users/><div><strong>Personas</strong><p>Los grupos “Personas” de OneDrive no están expuestos por Microsoft Graph. Para tenerlos acá necesitamos hacer reconocimiento facial propio.</p></div><span>próxima etapa</span></section>
-
-    {loading&&<section className="albumsLoading"><Loader2 className="spin"/><strong>Armando tus álbumes…</strong><span>La biblioteca se lee sin descargar los originales.</span></section>}
+    {loading&&<section className="albumsLoading"><Loader2 className="spin"/><strong>Leyendo solo tus álbumes…</strong><span>Ya no escaneamos miles de archivos para mostrar esta pantalla.</span></section>}
     {error&&<section className="connectionError">{error}</section>}
 
-    {!loading&&!error&&<section className="albumGrid realAlbums">
-      {albums.map(album=>{
-        const preview=album.items[0];
-        const href=`/review?kind=${kind}&rule=${encodeURIComponent(album.key)}&name=${encodeURIComponent(album.name)}`;
-        return <Link className="albumCardLink" href={href} key={`${kind}-${album.key}`}>
-          <article>
-            <div className="albumCover realCover">
-              {preview?<img src={`/api/media/thumbnail?account=${encodeURIComponent(preview.accountId)}&item=${encodeURIComponent(preview.id)}&size=medium`} alt="" loading="lazy"/>:<CalendarDays/>}
-              <span className="albumCount">{album.items.length}</span>
-            </div>
-            <div><strong>{album.name}</strong><span>{album.rule}</span><small>{album.items.length} {kind==='image'?'fotos':'videos'} · tocar para seleccionar</small></div>
-          </article>
-        </Link>;
-      })}
-    </section>}
+    {!loading&&!error&&groups.map(group=><section className="driveSection" key={group.id}>
+      <div className="driveSectionTitle"><div><strong>{group.display_name||group.email||`Cuenta ${group.slot}`}</strong><span>{group.email||'OneDrive'} · {group.drive_type||'drive'}</span></div><small>{group.albums.length} álbumes</small></div>
+
+      {!group.albumsSupported&&<div className="albumEmpty"><strong>Esta cuenta no expone álbumes mediante Graph</strong>Los álbumes reales por API están disponibles para OneDrive Personal. Podemos mantener álbumes inteligentes para esta cuenta.</div>}
+
+      {group.albumsSupported&&group.albums.length===0&&<div className="albumEmpty"><strong>No encontré álbumes en esta cuenta</strong>Si en OneDrive sí ves álbumes, avisame y reviso la respuesta exacta de esa cuenta.</div>}
+
+      <div className="onedriveAlbumGrid">
+        {group.albums.map(album=><Link className="onedriveAlbumCard" key={album.id} href={`/review?source=album&account=${encodeURIComponent(group.id)}&album=${encodeURIComponent(album.id)}&name=${encodeURIComponent(album.name)}&kind=image`}>
+          <div className="onedriveAlbumCover">
+            <Sparkles/>
+            <img src={`/api/media/thumbnail?account=${encodeURIComponent(group.id)}&item=${encodeURIComponent(album.id)}&usage=cover`} alt="" loading="lazy" onError={e=>{e.currentTarget.style.display='none';}}/>
+            <span className="realBadge">ONEDRIVE</span>
+            <span className="albumCount">{album.childCount}</span>
+          </div>
+          <div className="onedriveAlbumMeta"><strong>{album.name}</strong><span>{album.childCount} elementos</span><small>Tocar para revisar</small></div>
+        </Link>)}
+      </div>
+    </section>)}
   </main>;
 }

@@ -5,8 +5,10 @@ const GRAPH='https://graph.microsoft.com/v1.0';
 export const MICROSOFT_SCOPES='openid profile email offline_access User.Read Files.ReadWrite';
 
 type TokenResponse={access_token:string;refresh_token?:string;expires_in:number};
+type GraphPage<T>={value?:T[];'@odata.nextLink'?:string};
+
 export type MediaKind='image'|'video';
-export type DriveMediaItem={
+export type AlbumMediaItem={
   id:string;
   name:string;
   size?:number;
@@ -15,6 +17,19 @@ export type DriveMediaItem={
   takenDateTime?:string|null;
   mimeType:string;
   kind:MediaKind;
+};
+
+export type OneDriveAlbum={
+  id:string;
+  name:string;
+  childCount:number;
+  coverImageItemId?:string|null;
+};
+
+type GraphAlbum={
+  id:string;
+  name:string;
+  bundle?:{childCount?:number;album?:{coverImageItemId?:string|null}};
 };
 
 type GraphItem={
@@ -26,11 +41,6 @@ type GraphItem={
   file?:{mimeType?:string};
   photo?:{takenDateTime?:string};
   deleted?:Record<string,unknown>;
-};
-
-type GraphListResponse={
-  value?:GraphItem[];
-  '@odata.nextLink'?:string;
 };
 
 export function microsoftAuthorizeUrl(slot:string,state:string){
@@ -89,64 +99,127 @@ export async function refreshAccess(accountId:string):Promise<string>{
   });
   const r=await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body,cache:'no-store'});
   if(!r.ok)throw new Error(`Token refresh failed ${r.status}`);
-
   const t=await r.json() as TokenResponse;
+
   await db.from('onedrive_accounts').update({
     access_token_enc:encryptSecret(t.access_token),
     refresh_token_enc:encryptSecret(t.refresh_token||refresh),
     access_expires_at:new Date(Date.now()+t.expires_in*1000).toISOString()
   }).eq('id',accountId);
+
   return t.access_token;
 }
 
-export async function listDriveMedia(accountId:string,limit=2500):Promise<DriveMediaItem[]>{
+async function graphPaged<T>(firstUrl:string,access:string,maxPages=30){
+  let next:string|null=firstUrl;
+  const out:T[]=[];
+  let pages=0;
+  while(next&&pages<maxPages){
+    const r=await fetch(next,{headers:{Authorization:`Bearer ${access}`},cache:'no-store'});
+    if(!r.ok)throw new Error(`Graph request failed ${r.status}`);
+    const j=await r.json() as GraphPage<T>;
+    out.push(...(j.value||[]));
+    next=j['@odata.nextLink']||null;
+    pages++;
+  }
+  return out;
+}
+
+export async function listOneDriveAlbums(accountId:string):Promise<OneDriveAlbum[]>{
+  const access=await refreshAccess(accountId);
+  const u=new URL(`${GRAPH}/me/drive/bundles`);
+  u.searchParams.set('$filter','bundle/album ne null');
+
+  const albums=await graphPaged<GraphAlbum>(u.toString(),access,20);
+  return albums
+    .filter(x=>Boolean(x.bundle?.album))
+    .map(x=>({
+      id:x.id,
+      name:x.name,
+      childCount:x.bundle?.childCount||0,
+      coverImageItemId:x.bundle?.album?.coverImageItemId||null
+    }))
+    .sort((a,b)=>a.name.localeCompare(b.name,'es'));
+}
+
+export async function listAlbumMedia(accountId:string,albumId:string):Promise<AlbumMediaItem[]>{
+  const access=await refreshAccess(accountId);
+  const u=new URL(`${GRAPH}/me/drive/items/${encodeURIComponent(albumId)}/children`);
+  u.searchParams.set('$select','id,name,size,createdDateTime,lastModifiedDateTime,file,photo');
+  u.searchParams.set('$top','200');
+
+  const raw=await graphPaged<GraphItem>(u.toString(),access,30);
+  const media:AlbumMediaItem[]=[];
+
+  for(const x of raw){
+    if(!x.file||x.deleted)continue;
+    const mime=String(x.file.mimeType||'').toLowerCase();
+    const kind:MediaKind|null=mime.startsWith('image/')?'image':mime.startsWith('video/')?'video':null;
+    if(!kind)continue;
+    media.push({
+      id:x.id,
+      name:x.name,
+      size:x.size,
+      createdDateTime:x.createdDateTime,
+      lastModifiedDateTime:x.lastModifiedDateTime,
+      takenDateTime:x.photo?.takenDateTime||x.createdDateTime||x.lastModifiedDateTime||null,
+      mimeType:mime,
+      kind
+    });
+  }
+
+  return media.sort((a,b)=>String(b.takenDateTime||'').localeCompare(String(a.takenDateTime||'')));
+}
+
+export async function listDriveMedia(accountId:string,limit=2500):Promise<AlbumMediaItem[]>{
   const access=await refreshAccess(accountId);
   const first=new URL(`${GRAPH}/me/drive/root/delta`);
   first.searchParams.set('$select','id,name,size,createdDateTime,lastModifiedDateTime,file,photo,deleted');
   first.searchParams.set('$top','200');
 
   let next:string|null=first.toString();
-  const items:DriveMediaItem[]=[];
+  const items:AlbumMediaItem[]=[];
   let pages=0;
-  const maxPages=30;
-
-  while(next && pages<maxPages && items.length<limit){
+  while(next&&pages<30&&items.length<limit){
     const r=await fetch(next,{headers:{Authorization:`Bearer ${access}`},cache:'no-store'});
     if(!r.ok)throw new Error(`Graph delta failed ${r.status}`);
-    const j=await r.json() as GraphListResponse;
-
+    const j=await r.json() as GraphPage<GraphItem>;
     for(const x of j.value||[]){
       if(x.deleted||!x.file)continue;
       const mime=String(x.file.mimeType||'').toLowerCase();
       const kind:MediaKind|null=mime.startsWith('image/')?'image':mime.startsWith('video/')?'video':null;
       if(!kind)continue;
-      items.push({
-        id:x.id,
-        name:x.name,
-        size:x.size,
-        createdDateTime:x.createdDateTime,
-        lastModifiedDateTime:x.lastModifiedDateTime,
-        takenDateTime:x.photo?.takenDateTime||x.createdDateTime||x.lastModifiedDateTime||null,
-        mimeType:mime,
-        kind
-      });
+      items.push({id:x.id,name:x.name,size:x.size,createdDateTime:x.createdDateTime,lastModifiedDateTime:x.lastModifiedDateTime,takenDateTime:x.photo?.takenDateTime||x.createdDateTime||x.lastModifiedDateTime||null,mimeType:mime,kind});
       if(items.length>=limit)break;
     }
-
     next=j['@odata.nextLink']||null;
     pages++;
   }
-
   return items.sort((a,b)=>String(b.takenDateTime||'').localeCompare(String(a.takenDateTime||'')));
 }
 
-export async function getDriveThumbnailUrl(accountId:string,itemId:string,size:'small'|'medium'|'large'='medium'){
+async function thumbnailRequest(access:string,itemId:string,key:string){
+  const u=new URL(`${GRAPH}/me/drive/items/${encodeURIComponent(itemId)}/thumbnails`);
+  u.searchParams.set('$select',key);
+  const r=await fetch(u,{headers:{Authorization:`Bearer ${access}`},cache:'no-store'});
+  if(!r.ok)return null;
+  const j=await r.json() as {value?:Array<Record<string,{url?:string}|string>>};
+  const set=j.value?.[0];
+  const candidate=set?.[key];
+  return candidate&&typeof candidate==='object'&&'url' in candidate?candidate.url||null:null;
+}
+
+export async function getDriveThumbnailUrl(accountId:string,itemId:string,usage:'cover'|'review'|'standard'='standard'){
   const access=await refreshAccess(accountId);
+  const custom=usage==='cover'?'c720x420_crop':usage==='review'?'c1600x1600':'large';
+  const exact=await thumbnailRequest(access,itemId,custom);
+  if(exact)return exact;
+
   const r=await fetch(`${GRAPH}/me/drive/items/${encodeURIComponent(itemId)}/thumbnails`,{headers:{Authorization:`Bearer ${access}`},cache:'no-store'});
   if(!r.ok)throw new Error(`Thumbnail failed ${r.status}`);
   const j=await r.json() as {value?:Array<{small?:{url?:string};medium?:{url?:string};large?:{url?:string}}>} ;
   const set=j.value?.[0];
-  return set?.[size]?.url||set?.medium?.url||set?.small?.url||set?.large?.url||null;
+  return set?.large?.url||set?.medium?.url||set?.small?.url||null;
 }
 
 export async function listFolderPhotos(accountId:string,_folderItemId='root',limit=300){
