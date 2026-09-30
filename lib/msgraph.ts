@@ -2,7 +2,7 @@ import { decryptSecret, encryptSecret } from './crypto';
 import { supabaseAdmin } from './supabase-admin';
 
 const GRAPH='https://graph.microsoft.com/v1.0';
-export const MICROSOFT_SCOPES='openid profile email offline_access Files.ReadWrite';
+export const MICROSOFT_SCOPES='openid profile email offline_access User.Read Files.ReadWrite';
 
 export function microsoftAuthorizeUrl(slot:string,state:string){
   const p=new URLSearchParams({client_id:process.env.MICROSOFT_CLIENT_ID||'',response_type:'code',redirect_uri:`${process.env.APP_URL}/api/onedrive/callback`,response_mode:'query',scope:MICROSOFT_SCOPES,state,prompt:'select_account'});
