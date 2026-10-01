@@ -13,7 +13,7 @@ export async function GET(req:NextRequest){
     if(!url)return NextResponse.json({error:'Sin miniatura'},{status:404});
 
     const res=NextResponse.redirect(url,302);
-    res.headers.set('Cache-Control','private, max-age=3600, stale-while-revalidate=3600');
+    res.headers.set('Cache-Control','private, max-age=3600, stale-while-revalidate=7200');
     return res;
   }catch(e){
     console.error('Thumbnail route failed',e);
