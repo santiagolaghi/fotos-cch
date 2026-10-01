@@ -127,12 +127,37 @@ async function graphPaged<T>(firstUrl:string,access:string,maxPages=30){
 
 export async function listOneDriveAlbums(accountId:string):Promise<OneDriveAlbum[]>{
   const access=await refreshAccess(accountId);
-  const u=new URL(`${GRAPH}/drive/bundles`);
-  u.searchParams.set('$filter','bundle/album ne null');
+  const db=supabaseAdmin();
+  const {data:account,error}=await db.from('onedrive_accounts').select('drive_id').eq('id',accountId).single();
+  if(error||!account)throw new Error('Account drive missing');
 
-  const albums=await graphPaged<GraphAlbum>(u.toString(),access,20);
+  const attempts:string[]=[
+    `${GRAPH}/drive/bundles?filter=bundle%2Falbum%20ne%20null`,
+    `${GRAPH}/drive/bundles?$filter=bundle%2Falbum%20ne%20null`,
+    `${GRAPH}/drive/bundles`,
+    `${GRAPH}/drives/${encodeURIComponent(account.drive_id)}/bundles?filter=bundle%2Falbum%20ne%20null`
+  ];
+
+  let best:GraphAlbum[]=[];
+  for(const url of attempts){
+    try{
+      const found=await graphPaged<GraphAlbum>(url,access,20);
+      console.info('OneDrive albums attempt',{url:url.replace(GRAPH,''),count:found.length});
+      if(found.length>best.length)best=found;
+      const albumsOnly=found.filter(x=>x.bundle?.album!==undefined&&x.bundle?.album!==null);
+      if(albumsOnly.length){
+        best=albumsOnly;
+        break;
+      }
+    }catch(e){
+      console.warn('OneDrive albums attempt failed',{url:url.replace(GRAPH,''),error:e instanceof Error?e.message:'error'});
+    }
+  }
+
+  const albums=best.filter(x=>x.bundle?.album!==undefined&&x.bundle?.album!==null);
+  console.info('OneDrive albums resolved',{accountId,count:albums.length,totalBundles:best.length});
+
   return albums
-    .filter(x=>Boolean(x.bundle?.album))
     .map(x=>({
       id:x.id,
       name:x.name,
