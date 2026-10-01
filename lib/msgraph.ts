@@ -127,7 +127,7 @@ async function graphPaged<T>(firstUrl:string,access:string,maxPages=30){
 
 export async function listOneDriveAlbums(accountId:string):Promise<OneDriveAlbum[]>{
   const access=await refreshAccess(accountId);
-  const u=new URL(`${GRAPH}/me/drive/bundles`);
+  const u=new URL(`${GRAPH}/drive/bundles`);
   u.searchParams.set('$filter','bundle/album ne null');
 
   const albums=await graphPaged<GraphAlbum>(u.toString(),access,20);
@@ -144,7 +144,7 @@ export async function listOneDriveAlbums(accountId:string):Promise<OneDriveAlbum
 
 export async function listAlbumMedia(accountId:string,albumId:string):Promise<AlbumMediaItem[]>{
   const access=await refreshAccess(accountId);
-  const u=new URL(`${GRAPH}/me/drive/items/${encodeURIComponent(albumId)}/children`);
+  const u=new URL(`${GRAPH}/drive/items/${encodeURIComponent(albumId)}/children`);
   u.searchParams.set('$select','id,name,size,createdDateTime,lastModifiedDateTime,file,photo');
   u.searchParams.set('$top','200');
 
