@@ -321,5 +321,5 @@ export async function listFolderPhotos(accountId:string,_folderItemId='root',lim
 export async function deleteDriveItem(accountId:string,itemId:string){
   const access=await refreshAccess(accountId);
   const r=await fetch(`${GRAPH}/me/drive/items/${encodeURIComponent(itemId)}`,{method:'DELETE',headers:{Authorization:`Bearer ${access}`}});
-  if(r.status!==204)throw new Error(`Delete failed ${r.status}`);
+  if(r.status!==204&&r.status!==404)throw new Error(`Delete failed ${r.status}`);
 }
