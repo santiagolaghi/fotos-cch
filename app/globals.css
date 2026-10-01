@@ -95,3 +95,24 @@
 .gestureStamp{
   z-index:6;
 }
+
+
+/* REREVIEW_GESTURES_V7 */
+.previousDecision{
+  position:absolute;
+  right:12px;
+  bottom:12px;
+  z-index:5;
+  border:1px solid rgba(255,255,255,.12);
+  border-radius:999px;
+  padding:6px 9px;
+  background:rgba(5,7,10,.72);
+  backdrop-filter:blur(7px);
+  font-size:10px;
+  font-weight:900;
+}
+.previousDecision.keep{color:var(--green)}
+.previousDecision.trash{color:var(--red)}
+.rereviewButton{width:100%;justify-content:center;margin-top:16px!important}
+.rereviewSecondary{width:100%;justify-content:center;margin-top:9px}
+.pinchHint{max-width:72%;white-space:normal;line-height:1.15}

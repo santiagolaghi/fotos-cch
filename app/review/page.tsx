@@ -2,16 +2,17 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { Check, ChevronLeft, ImageOff, Loader2, RotateCcw, Trash2, X } from 'lucide-react';
+import { Check, ChevronLeft, Eye, ImageOff, Loader2, RotateCcw, Trash2, X } from 'lucide-react';
 
 type Kind='image'|'video';
-type Item={id:string;name:string;date:string|null;size:number;kind:Kind;accountId:string;account:string};
+type PriorAction='keep'|'trash'|null;
+type Item={id:string;name:string;date:string|null;size:number;kind:Kind;accountId:string;account:string;previousAction?:PriorAction};
 type Stats={total:number;keep:number;trash:number;pending:number};
-type AlbumResponse={items?:Item[];total?:number;stats?:Stats;error?:string};
+type AlbumResponse={items?:Item[];total?:number;rereview?:boolean;stats?:Stats;error?:string};
 type Decision='keep'|'trash'|null;
 type LocalMemory=Record<string,'keep'|'trash'>;
 type Point={x:number;y:number};
-type GestureMode='idle'|'swipe'|'pinch'|'pan';
+type GestureMode='idle'|'swipe'|'pinch'|'blocked';
 
 const MEMORY_KEY='fotos-cch-review-memory-v2';
 
@@ -41,6 +42,8 @@ export default function Review(){
   const [kind,setKind]=useState<Kind>('image');
   const [decisions,setDecisions]=useState<Record<string,Decision>>({});
   const [baseCounts,setBaseCounts]=useState({keep:0,trash:0});
+  const [isRereview,setIsRereview]=useState(false);
+  const [baseQuery,setBaseQuery]=useState('');
 
   const cardRef=useRef<HTMLElement|null>(null);
   const imageRef=useRef<HTMLImageElement|null>(null);
@@ -53,9 +56,7 @@ export default function Review(){
   const dragX=useRef(0);
   const horizontalLocked=useRef(false);
   const animating=useRef(false);
-
   const zoom=useRef({scale:1,x:0,y:0});
-  const panLast=useRef<Point|null>(null);
   const pinchStart=useRef<{distance:number;scale:number;center:Point;x:number;y:number}|null>(null);
 
   const current=items[index];
@@ -85,11 +86,25 @@ export default function Review(){
       try{
         setLoading(true);setError(null);
         const q=new URLSearchParams(window.location.search);
+        const rereview=q.get('rereview')==='1';
+        setIsRereview(rereview);
         setName(q.get('name')||'Selección');
         setKind(q.get('kind')==='video'?'video':'image');
+
+        const clean=new URLSearchParams(q);
+        clean.delete('rereview');
+        setBaseQuery(clean.toString());
+
         const r=await fetch(`/api/library/album?${q.toString()}`,{cache:'no-store'});
         const j=await r.json() as AlbumResponse;
         if(!r.ok)throw new Error(j.error||'No se pudo abrir el álbum');
+
+        if(rereview){
+          setBaseCounts({keep:0,trash:0});
+          setItems(j.items||[]);
+          setIndex(0);
+          return;
+        }
 
         const memory=readMemory();
         let extraKeep=0,extraTrash=0;
@@ -119,12 +134,10 @@ export default function Review(){
     const z=zoom.current;
     img.style.transform=`translate3d(${z.x}px,${z.y}px,0) scale(${z.scale})`;
   }
-
   function resetImageZoom(){
     zoom.current={scale:1,x:0,y:0};
     applyImageZoom();
   }
-
   function resetCardVisual(){
     const card=cardRef.current;
     if(card){
@@ -142,7 +155,6 @@ export default function Review(){
     resetImageZoom();
     pointers.current.clear();
     mode.current='idle';
-    panLast.current=null;
     pinchStart.current=null;
     horizontalLocked.current=false;
     animating.current=false;
@@ -154,8 +166,9 @@ export default function Review(){
     return a;
   },{keep:0,trash:0}),[decisions]);
 
-  const counts={keep:baseCounts.keep+sessionCounts.keep,trash:baseCounts.trash+sessionCounts.trash};
+  const counts=isRereview?sessionCounts:{keep:baseCounts.keep+sessionCounts.keep,trash:baseCounts.trash+sessionCounts.trash};
   const pending=Math.max(0,items.length-index);
+  const rereviewHref=`/review?${baseQuery}${baseQuery?'&':''}rereview=1`;
 
   function finishDecision(item:Item,action:'keep'|'trash'){
     remember(item,action);
@@ -225,12 +238,6 @@ export default function Review(){
       return;
     }
 
-    if(zoom.current.scale>1.015){
-      mode.current='pan';
-      panLast.current={x:e.clientX,y:e.clientY};
-      return;
-    }
-
     mode.current='swipe';
     swipeStart.current={x:e.clientX,y:e.clientY,t:performance.now()};
     dragX.current=0;
@@ -239,31 +246,22 @@ export default function Review(){
 
   function onPointerMove(e:ReactPointerEvent<HTMLElement>){
     if(animating.current||!pointers.current.has(e.pointerId))return;
-    const previous=pointers.current.get(e.pointerId)!;
     pointers.current.set(e.pointerId,{x:e.clientX,y:e.clientY});
 
     if(pointers.current.size>=2||mode.current==='pinch'){
+      if(pointers.current.size<2||!pinchStart.current)return;
       if(mode.current!=='pinch')startPinch();
+
       const values=[...pointers.current.values()];
-      if(values.length<2||!pinchStart.current)return;
       const a=values[0],b=values[1];
       const center=pointCenter(a,b);
       const factor=pointDistance(a,b)/pinchStart.current.distance;
       const nextScale=Math.max(1,Math.min(5,pinchStart.current.scale*factor));
+
       zoom.current.scale=nextScale;
       zoom.current.x=pinchStart.current.x+(center.x-pinchStart.current.center.x);
       zoom.current.y=pinchStart.current.y+(center.y-pinchStart.current.center.y);
-      if(nextScale<=1.015){zoom.current={scale:1,x:0,y:0};}
-      applyImageZoom();
-      return;
-    }
-
-    if(mode.current==='pan'||zoom.current.scale>1.015){
-      mode.current='pan';
-      const last=panLast.current||previous;
-      zoom.current.x+=e.clientX-last.x;
-      zoom.current.y+=e.clientY-last.y;
-      panLast.current={x:e.clientX,y:e.clientY};
+      if(nextScale<=1.015)zoom.current={scale:1,x:0,y:0};
       applyImageZoom();
       return;
     }
@@ -292,20 +290,12 @@ export default function Review(){
     if(mode.current==='pinch'){
       pinchStart.current=null;
       resetCardVisual();
-      if(pointers.current.size===1){
-        const remaining=[...pointers.current.values()][0];
-        panLast.current=remaining;
-        mode.current=zoom.current.scale>1.015?'pan':'idle';
-      }else{
-        panLast.current=null;
-        mode.current='idle';
-        if(zoom.current.scale<=1.015)resetImageZoom();
-      }
+      mode.current=pointers.current.size>0?'blocked':'idle';
       return;
     }
 
-    if(mode.current==='pan'){
-      if(pointers.current.size===0){mode.current='idle';panLast.current=null;}
+    if(mode.current==='blocked'){
+      if(pointers.current.size===0)mode.current='idle';
       return;
     }
 
@@ -337,12 +327,21 @@ export default function Review(){
 
   if(loading)return <main className="reviewShell"><header className="topbar"><Link href="/albums"><ChevronLeft/></Link><div><strong>{name}</strong><small>preparando selección</small></div><span/></header><section className="loadingCard"><Loader2 className="spin"/><h2>Cargando selección</h2><p>Precargando las próximas fotos.</p></section></main>;
   if(error)return <main className="reviewShell"><header className="topbar"><Link href="/albums"><ChevronLeft/></Link><div><strong>Selección</strong><small>error</small></div><span/></header><section className="doneCard"><ImageOff/><h2>No pude abrir este álbum</h2><p>{error}</p><Link className="primary" href="/albums">Volver</Link></section></main>;
-  if(!items.length)return <main className="reviewShell"><header className="topbar"><Link href="/albums"><ChevronLeft/></Link><div><strong>{name}</strong><small>al día</small></div><span/></header><section className="doneCard"><Check/><h2>No quedan pendientes</h2><p>{counts.keep} conservadas · {counts.trash} descartadas.</p><Link className="primary" href="/albums">Elegir otro álbum</Link></section></main>;
+
+  if(!items.length&&!isRereview)return <main className="reviewShell">
+    <header className="topbar"><Link href="/albums"><ChevronLeft/></Link><div><strong>{name}</strong><small>al día</small></div><span/></header>
+    <section className="doneCard">
+      <Check/><h2>No quedan pendientes</h2>
+      <p>{counts.keep} conservadas · {counts.trash} descartadas.</p>
+      <Link className="primary rereviewButton" href={rereviewHref}><Eye/> Re-revisar todas</Link>
+      <Link className="secondary rereviewSecondary" href="/albums">Elegir otro álbum</Link>
+    </section>
+  </main>;
 
   return <main className="reviewShell">
-    <header className="topbar"><Link href="/albums"><ChevronLeft/></Link><div><strong>{name}</strong><small className="reviewHeaderSub">{pending} pendientes · {kind==='image'?'fotos':'videos'}</small></div><button onClick={undo} disabled={index===0}><RotateCcw/></button></header>
+    <header className="topbar"><Link href="/albums"><ChevronLeft/></Link><div><strong>{name}</strong><small className="reviewHeaderSub">{isRereview?'RE-REVISIÓN · ':''}{pending} {isRereview?'por revisar':'pendientes'} · {kind==='image'?'fotos':'videos'}</small></div><button onClick={undo} disabled={index===0}><RotateCcw/></button></header>
     {syncError&&<div className="syncWarning">⚠ {syncError} · La decisión quedó guardada en este dispositivo y se reintentará.</div>}
-    <section className="statusRow"><span className="keepPill"><Check/> {counts.keep} conservar</span><span className="trashPill"><Trash2/> {counts.trash} descarte</span><span>{pending} pendientes</span></section>
+    <section className="statusRow"><span className="keepPill"><Check/> {counts.keep} conservar</span><span className="trashPill"><Trash2/> {counts.trash} descarte</span><span>{pending} {isRereview?'restantes':'pendientes'}</span></section>
 
     {current?<>
       <section className="swipeStage swipeStageLive">
@@ -356,7 +355,8 @@ export default function Review(){
           <div className="photoReal reviewHd inlinePinchStage">
             <img ref={imageRef} key={itemKey(current)} src={preview(current)} alt={current.name} draggable={false} fetchPriority="high" decoding="async"/>
             <span className="qualityBadge">HD</span>
-            <span className="pinchHint">2 dedos = zoom</span>
+            <span className="pinchHint">1 dedo = decidir · 2 dedos = zoom/mover</span>
+            {isRereview&&current.previousAction&&<span className={`previousDecision ${current.previousAction}`}>Antes: {current.previousAction==='keep'?'conservar':'descartar'}</span>}
           </div>
 
           <div ref={keepStampRef} className="stamp keepStamp gestureStamp">CONSERVAR</div>
@@ -366,8 +366,13 @@ export default function Review(){
         </article>
       </section>
 
-      <p className="hint">1 dedo: swipe corto · 2 dedos: ampliar · con zoom: 1 dedo mueve</p>
+      <p className="hint">1 dedo siempre conserva/descarta · 2 dedos amplían y mueven la foto</p>
       <section className="decisionBar"><button className="trashBtn" onClick={()=>fly('trash')}><X/></button><button className="keepBtn" onClick={()=>fly('keep')}><Check/></button></section>
-    </>:<section className="doneCard"><Check/><h2>Selección terminada</h2><p>{counts.keep} conservadas · {counts.trash} descartadas.</p><Link className="primary" href="/albums">Volver a álbumes</Link></section>}
+    </>:<section className="doneCard">
+      <Check/><h2>{isRereview?'Re-revisión terminada':'Selección terminada'}</h2>
+      <p>{counts.keep} conservadas · {counts.trash} descartadas {isRereview?'en esta vuelta':''}.</p>
+      <Link className="primary rereviewButton" href={rereviewHref}><RotateCcw/> Re-revisar otra vez</Link>
+      <Link className="secondary rereviewSecondary" href="/albums">Volver a álbumes</Link>
+    </section>}
   </main>;
 }

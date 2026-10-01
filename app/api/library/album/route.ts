@@ -24,6 +24,7 @@ export async function GET(req:NextRequest){
     const folder=req.nextUrl.searchParams.get('folder');
     const date=req.nextUrl.searchParams.get('date');
     const weekday=Number(req.nextUrl.searchParams.get('weekday')||'-1');
+    const rereview=req.nextUrl.searchParams.get('rereview')==='1';
 
     const {data:accounts,error}=await supabaseAdmin().from('onedrive_accounts').select('id,slot,display_name,email').order('slot');
     if(error)throw error;
@@ -42,21 +43,34 @@ export async function GET(req:NextRequest){
       });
 
       total+=matched.length;
-      const pending=[];
+      const visible=[];
       for(const item of matched){
-        const action=reviewed.get(`${account.id}:${item.id}`);
-        if(action==='keep'){keep++;continue;}
-        if(action==='trash'){trash++;continue;}
-        pending.push({
-          id:item.id,name:item.name,date:item.date,size:item.size,kind:item.kind,
-          accountId:account.id,account:account.display_name||account.email||`Cuenta ${account.slot}`
+        const previousAction=reviewed.get(`${account.id}:${item.id}`)||null;
+        if(previousAction==='keep')keep++;
+        if(previousAction==='trash')trash++;
+        if(!rereview&&previousAction)continue;
+
+        visible.push({
+          id:item.id,
+          name:item.name,
+          date:item.date,
+          size:item.size,
+          kind:item.kind,
+          accountId:account.id,
+          account:account.display_name||account.email||`Cuenta ${account.slot}`,
+          previousAction
         });
       }
-      return pending;
+      return visible;
     }));
 
     const items=batches.flat().sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
-    return NextResponse.json({items,total,stats:{total,keep,trash,pending:items.length}});
+    return NextResponse.json({
+      items,
+      total,
+      rereview,
+      stats:{total,keep,trash,pending:rereview?total:items.length}
+    });
   }catch(e){
     console.error('Library album failed',e);
     return NextResponse.json({error:e instanceof Error?e.message:'No se pudo abrir el álbum'},{status:500});
