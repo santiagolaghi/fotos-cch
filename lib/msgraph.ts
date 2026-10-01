@@ -293,7 +293,7 @@ async function thumbnailRequest(access:string,itemId:string,key:string){
 
 export async function getDriveThumbnailUrl(accountId:string,itemId:string,usage:'cover'|'review'|'standard'='standard'){
   const access=await refreshAccess(accountId);
-  const custom=usage==='cover'?'c520x360_crop':usage==='review'?'c1200x1200':'large';
+  const custom=usage==='cover'?'c520x360_crop':usage==='review'?'c1600x1600':'large';
   const exact=await thumbnailRequest(access,itemId,custom);
   if(exact)return exact;
 
@@ -306,12 +306,16 @@ export async function getDriveThumbnailUrl(accountId:string,itemId:string,usage:
 
 export async function getOriginalDownloadUrl(accountId:string,itemId:string){
   const access=await refreshAccess(accountId);
-  const u=new URL(`${GRAPH}/me/drive/items/${encodeURIComponent(itemId)}`);
-  u.searchParams.set('$select','id,@microsoft.graph.downloadUrl');
-  const r=await fetch(u,{headers:{Authorization:`Bearer ${access}`},cache:'no-store'});
+  const r=await fetch(`${GRAPH}/me/drive/items/${encodeURIComponent(itemId)}/content`,{
+    headers:{Authorization:`Bearer ${access}`},
+    cache:'no-store',
+    redirect:'manual'
+  });
+  if(r.status===301||r.status===302||r.status===303||r.status===307||r.status===308){
+    return r.headers.get('location');
+  }
   if(!r.ok)throw new Error(`Original URL failed ${r.status}`);
-  const j=await r.json() as {'@microsoft.graph.downloadUrl'?:string};
-  return j['@microsoft.graph.downloadUrl']||null;
+  return null;
 }
 
 export async function listFolderPhotos(accountId:string,_folderItemId='root',limit=300){

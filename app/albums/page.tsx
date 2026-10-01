@@ -70,7 +70,9 @@ export default function Albums(){
     catch(e){setError(e instanceof Error?e.message:'No se pudo actualizar');}
   }
 
-  const total=useMemo(()=>data.reduce((n,a)=>n+(a.state.summary?(kind==='image'?a.state.summary.imageCount:a.state.summary.videoCount):0),0),[data,kind]);
+  const imageTotal=useMemo(()=>data.reduce((n,a)=>n+(a.state.summary?.imageCount||0),0),[data]);
+  const videoTotal=useMemo(()=>data.reduce((n,a)=>n+(a.state.summary?.videoCount||0),0),[data]);
+  const total=kind==='image'?imageTotal:videoTotal;
   const dateMap=useMemo(()=>{
     const map=new Map<string,{count:number;cover:{accountId:string;itemId:string}|null}>();
     for(const account of data)for(const d of account.state.summary?.dates||[]){
@@ -92,7 +94,7 @@ export default function Albums(){
 
     <section className="libraryStatus">
       {syncing?<Loader2 className="spin"/>:<Zap/>}
-      <div><strong>{syncing?'Sincronizando OneDrive…':'Biblioteca lista'}</strong><span>{scanned.toLocaleString('es-AR')} elementos indexados · {total.toLocaleString('es-AR')} {kind==='image'?'fotos':'videos'}</span>{syncing&&<div className="syncProgress"><i style={{width:complete?'100%':'65%'}}/></div>}<small>{complete?'Las decisiones quedan guardadas aunque salgas y vuelvas.':'Primera sincronización en curso.'}</small></div>
+      <div><strong>{syncing?'Sincronizando OneDrive…':'Biblioteca lista'}</strong><span>{imageTotal.toLocaleString('es-AR')} fotos · {videoTotal.toLocaleString('es-AR')} videos</span>{syncing&&<div className="syncProgress"><i style={{width:complete?'100%':'65%'}}/></div>}<small>{complete?`${scanned.toLocaleString('es-AR')} elementos de OneDrive analizados (incluye carpetas y otros archivos).`:'Primera sincronización en curso.'}</small></div>
     </section>
 
     <section className="kindTabs">
