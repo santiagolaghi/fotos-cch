@@ -282,7 +282,7 @@ export async function scanDriveDeltaBatch(accountId:string,cursor?:string|null,m
 
 async function thumbnailRequest(access:string,itemId:string,key:string){
   const u=new URL(`${GRAPH}/me/drive/items/${encodeURIComponent(itemId)}/thumbnails`);
-  u.searchParams.set('$select',key);
+  u.searchParams.set('select',key);
   const r=await fetch(u,{headers:{Authorization:`Bearer ${access}`},cache:'no-store'});
   if(!r.ok)return null;
   const j=await r.json() as {value?:Array<Record<string,{url?:string}|string>>};
