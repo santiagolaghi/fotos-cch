@@ -1,8 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronLeft, ImageOff, Loader2, Maximize2, Minus, Plus, RotateCcw, Trash2, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { Check, ChevronLeft, ImageOff, Loader2, RotateCcw, Trash2, X } from 'lucide-react';
 
 type Kind='image'|'video';
 type Item={id:string;name:string;date:string|null;size:number;kind:Kind;accountId:string;account:string};
@@ -10,6 +10,8 @@ type Stats={total:number;keep:number;trash:number;pending:number};
 type AlbumResponse={items?:Item[];total?:number;stats?:Stats;error?:string};
 type Decision='keep'|'trash'|null;
 type LocalMemory=Record<string,'keep'|'trash'>;
+type Point={x:number;y:number};
+type GestureMode='idle'|'swipe'|'pinch'|'pan';
 
 const MEMORY_KEY='fotos-cch-review-memory-v2';
 
@@ -26,79 +28,8 @@ function remember(item:Item,action:'keep'|'trash'){
 function forget(item:Item){
   const memory=readMemory();delete memory[itemKey(item)];writeMemory(memory);
 }
-
-function ZoomViewer({item,preview,original,onClose}:{item:Item;preview:string;original:string;onClose:()=>void}){
-  const imgRef=useRef<HTMLImageElement|null>(null);
-  const pointers=useRef(new Map<number,{x:number;y:number}>());
-  const state=useRef({scale:1,x:0,y:0});
-  const pinch=useRef<{distance:number;scale:number}|null>(null);
-  const lastSingle=useRef<{x:number;y:number}|null>(null);
-
-  function apply(){
-    const img=imgRef.current;if(!img)return;
-    const s=state.current;
-    img.style.transform=`translate3d(${s.x}px,${s.y}px,0) scale(${s.scale})`;
-  }
-  function setScale(next:number){
-    state.current.scale=Math.max(1,Math.min(5,next));
-    if(state.current.scale===1){state.current.x=0;state.current.y=0;}
-    apply();
-  }
-  function distance(){
-    const values=[...pointers.current.values()];
-    if(values.length<2)return 0;
-    return Math.hypot(values[0].x-values[1].x,values[0].y-values[1].y);
-  }
-
-  return <section className="zoomViewer">
-    <header>
-      <div><strong>{item.date?new Date(item.date).toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'numeric'}):'Foto'}</strong><small>Pellizcá para ampliar · arrastrá para mover</small></div>
-      <button onClick={onClose}><X/></button>
-    </header>
-    <div className="zoomStage"
-      onPointerDown={e=>{
-        e.currentTarget.setPointerCapture(e.pointerId);
-        pointers.current.set(e.pointerId,{x:e.clientX,y:e.clientY});
-        if(pointers.current.size===1)lastSingle.current={x:e.clientX,y:e.clientY};
-        if(pointers.current.size===2)pinch.current={distance:distance(),scale:state.current.scale};
-      }}
-      onPointerMove={e=>{
-        if(!pointers.current.has(e.pointerId))return;
-        const prev=pointers.current.get(e.pointerId)!;
-        pointers.current.set(e.pointerId,{x:e.clientX,y:e.clientY});
-        if(pointers.current.size>=2&&pinch.current){
-          const d=distance();
-          if(pinch.current.distance>0)setScale(pinch.current.scale*(d/pinch.current.distance));
-          return;
-        }
-        if(pointers.current.size===1&&state.current.scale>1){
-          state.current.x+=e.clientX-prev.x;
-          state.current.y+=e.clientY-prev.y;
-          apply();
-        }
-      }}
-      onPointerUp={e=>{
-        pointers.current.delete(e.pointerId);
-        pinch.current=null;
-        lastSingle.current=null;
-      }}
-      onPointerCancel={e=>{
-        pointers.current.delete(e.pointerId);
-        pinch.current=null;
-        lastSingle.current=null;
-      }}
-      onDoubleClick={()=>setScale(state.current.scale>1?1:2.5)}
-    >
-      <img ref={imgRef} src={preview} alt={item.name} draggable={false}/>
-    </div>
-    <footer>
-      <button onClick={()=>setScale(state.current.scale-0.5)}><Minus/></button>
-      <button className="zoomReset" onClick={()=>setScale(1)}>100%</button>
-      <button onClick={()=>setScale(state.current.scale+0.5)}><Plus/></button>
-      <a href={original} target="_blank" rel="noreferrer">Abrir original</a>
-    </footer>
-  </section>;
-}
+function pointDistance(a:Point,b:Point){return Math.hypot(a.x-b.x,a.y-b.y);}
+function pointCenter(a:Point,b:Point){return {x:(a.x+b.x)/2,y:(a.y+b.y)/2};}
 
 export default function Review(){
   const [items,setItems]=useState<Item[]>([]);
@@ -110,21 +41,28 @@ export default function Review(){
   const [kind,setKind]=useState<Kind>('image');
   const [decisions,setDecisions]=useState<Record<string,Decision>>({});
   const [baseCounts,setBaseCounts]=useState({keep:0,trash:0});
-  const [zoomItem,setZoomItem]=useState<Item|null>(null);
 
   const cardRef=useRef<HTMLElement|null>(null);
+  const imageRef=useRef<HTMLImageElement|null>(null);
   const keepStampRef=useRef<HTMLDivElement|null>(null);
   const trashStampRef=useRef<HTMLDivElement|null>(null);
-  const start=useRef({x:0,y:0,t:0});
+
+  const pointers=useRef(new Map<number,Point>());
+  const mode=useRef<GestureMode>('idle');
+  const swipeStart=useRef({x:0,y:0,t:0});
   const dragX=useRef(0);
+  const horizontalLocked=useRef(false);
   const animating=useRef(false);
+
+  const zoom=useRef({scale:1,x:0,y:0});
+  const panLast=useRef<Point|null>(null);
+  const pinchStart=useRef<{distance:number;scale:number;center:Point;x:number;y:number}|null>(null);
 
   const current=items[index];
   const next=items[index+1];
 
   const preview=(item:Item)=>`/api/media/thumbnail?account=${encodeURIComponent(item.accountId)}&item=${encodeURIComponent(item.id)}&usage=review`;
   const cover=(item:Item)=>`/api/media/thumbnail?account=${encodeURIComponent(item.accountId)}&item=${encodeURIComponent(item.id)}&usage=cover`;
-  const original=(item:Item)=>`/api/media/original?account=${encodeURIComponent(item.accountId)}&item=${encodeURIComponent(item.id)}`;
 
   async function persist(item:Item,action:'keep'|'trash'|'skip'){
     try{
@@ -173,10 +111,21 @@ export default function Review(){
   useEffect(()=>{
     if(typeof window==='undefined')return;
     items.slice(index,index+3).forEach(item=>{const img=new window.Image();img.decoding='async';img.src=preview(item);});
-    items.slice(index+3,index+7).forEach(item=>{const img=new window.Image();img.decoding='async';img.src=cover(item);});
+    items.slice(index+3,index+8).forEach(item=>{const img=new window.Image();img.decoding='async';img.src=cover(item);});
   },[items,index]);
 
-  useEffect(()=>{
+  function applyImageZoom(){
+    const img=imageRef.current;if(!img)return;
+    const z=zoom.current;
+    img.style.transform=`translate3d(${z.x}px,${z.y}px,0) scale(${z.scale})`;
+  }
+
+  function resetImageZoom(){
+    zoom.current={scale:1,x:0,y:0};
+    applyImageZoom();
+  }
+
+  function resetCardVisual(){
     const card=cardRef.current;
     if(card){
       card.style.transition='none';
@@ -186,6 +135,16 @@ export default function Review(){
     if(keepStampRef.current)keepStampRef.current.style.opacity='0';
     if(trashStampRef.current)trashStampRef.current.style.opacity='0';
     dragX.current=0;
+  }
+
+  useEffect(()=>{
+    resetCardVisual();
+    resetImageZoom();
+    pointers.current.clear();
+    mode.current='idle';
+    panLast.current=null;
+    pinchStart.current=null;
+    horizontalLocked.current=false;
     animating.current=false;
   },[index]);
 
@@ -208,14 +167,15 @@ export default function Review(){
   function fly(action:'keep'|'trash'){
     if(!current||animating.current)return;
     animating.current=true;
+    resetImageZoom();
     const chosen=current;
     const card=cardRef.current;
     if(!card){finishDecision(chosen,action);return;}
     const direction=action==='keep'?1:-1;
-    card.style.transition='transform 145ms cubic-bezier(.2,.8,.25,1), opacity 145ms ease';
-    card.style.transform=`translate3d(${direction*115}vw,0,0) rotate(${direction*14}deg)`;
-    card.style.opacity='.2';
-    window.setTimeout(()=>finishDecision(chosen,action),118);
+    card.style.transition='transform 130ms cubic-bezier(.16,.8,.24,1), opacity 130ms ease';
+    card.style.transform=`translate3d(${direction*115}vw,0,0) rotate(${direction*12}deg)`;
+    card.style.opacity='.12';
+    window.setTimeout(()=>finishDecision(chosen,action),105);
   }
 
   function undo(){
@@ -228,45 +188,150 @@ export default function Review(){
     void persist(previous,'skip');
   }
 
-  function paint(dx:number){
+  function paintSwipe(dx:number){
     const card=cardRef.current;if(!card)return;
     dragX.current=dx;
     card.style.transition='none';
-    card.style.transform=`translate3d(${dx}px,0,0) rotate(${dx/46}deg)`;
-    const opacity=Math.min(1,Math.abs(dx)/26);
+    card.style.transform=`translate3d(${dx}px,0,0) rotate(${dx/54}deg)`;
+    const opacity=Math.min(1,Math.max(0,(Math.abs(dx)-5)/20));
     if(keepStampRef.current)keepStampRef.current.style.opacity=dx>0?String(opacity):'0';
     if(trashStampRef.current)trashStampRef.current.style.opacity=dx<0?String(opacity):'0';
   }
 
-  function onPointerDown(e:React.PointerEvent<HTMLElement>){
+  function startPinch(){
+    const values=[...pointers.current.values()];
+    if(values.length<2)return;
+    const a=values[0],b=values[1];
+    const center=pointCenter(a,b);
+    pinchStart.current={
+      distance:Math.max(1,pointDistance(a,b)),
+      scale:zoom.current.scale,
+      center,
+      x:zoom.current.x,
+      y:zoom.current.y
+    };
+    mode.current='pinch';
+    horizontalLocked.current=false;
+    resetCardVisual();
+  }
+
+  function onPointerDown(e:ReactPointerEvent<HTMLElement>){
     if(animating.current)return;
     e.currentTarget.setPointerCapture(e.pointerId);
-    start.current={x:e.clientX,y:e.clientY,t:performance.now()};
+    pointers.current.set(e.pointerId,{x:e.clientX,y:e.clientY});
+
+    if(pointers.current.size>=2){
+      startPinch();
+      return;
+    }
+
+    if(zoom.current.scale>1.015){
+      mode.current='pan';
+      panLast.current={x:e.clientX,y:e.clientY};
+      return;
+    }
+
+    mode.current='swipe';
+    swipeStart.current={x:e.clientX,y:e.clientY,t:performance.now()};
     dragX.current=0;
+    horizontalLocked.current=false;
   }
-  function onPointerMove(e:React.PointerEvent<HTMLElement>){
-    if(animating.current)return;
-    const dx=e.clientX-start.current.x;
-    const dy=e.clientY-start.current.y;
-    if(Math.abs(dy)>Math.abs(dx)*1.4&&Math.abs(dy)>12)return;
-    paint(Math.max(-180,Math.min(180,dx)));
+
+  function onPointerMove(e:ReactPointerEvent<HTMLElement>){
+    if(animating.current||!pointers.current.has(e.pointerId))return;
+    const previous=pointers.current.get(e.pointerId)!;
+    pointers.current.set(e.pointerId,{x:e.clientX,y:e.clientY});
+
+    if(pointers.current.size>=2||mode.current==='pinch'){
+      if(mode.current!=='pinch')startPinch();
+      const values=[...pointers.current.values()];
+      if(values.length<2||!pinchStart.current)return;
+      const a=values[0],b=values[1];
+      const center=pointCenter(a,b);
+      const factor=pointDistance(a,b)/pinchStart.current.distance;
+      const nextScale=Math.max(1,Math.min(5,pinchStart.current.scale*factor));
+      zoom.current.scale=nextScale;
+      zoom.current.x=pinchStart.current.x+(center.x-pinchStart.current.center.x);
+      zoom.current.y=pinchStart.current.y+(center.y-pinchStart.current.center.y);
+      if(nextScale<=1.015){zoom.current={scale:1,x:0,y:0};}
+      applyImageZoom();
+      return;
+    }
+
+    if(mode.current==='pan'||zoom.current.scale>1.015){
+      mode.current='pan';
+      const last=panLast.current||previous;
+      zoom.current.x+=e.clientX-last.x;
+      zoom.current.y+=e.clientY-last.y;
+      panLast.current={x:e.clientX,y:e.clientY};
+      applyImageZoom();
+      return;
+    }
+
+    if(mode.current!=='swipe')return;
+    const dx=e.clientX-swipeStart.current.x;
+    const dy=e.clientY-swipeStart.current.y;
+
+    if(!horizontalLocked.current){
+      if(Math.abs(dx)<7&&Math.abs(dy)<7)return;
+      if(Math.abs(dy)>Math.abs(dx)*1.15){
+        mode.current='idle';
+        resetCardVisual();
+        return;
+      }
+      horizontalLocked.current=true;
+    }
+
+    paintSwipe(Math.max(-160,Math.min(160,dx)));
   }
-  function onPointerUp(){
+
+  function onPointerUp(e:ReactPointerEvent<HTMLElement>){
     if(animating.current)return;
+    pointers.current.delete(e.pointerId);
+
+    if(mode.current==='pinch'){
+      pinchStart.current=null;
+      resetCardVisual();
+      if(pointers.current.size===1){
+        const remaining=[...pointers.current.values()][0];
+        panLast.current=remaining;
+        mode.current=zoom.current.scale>1.015?'pan':'idle';
+      }else{
+        panLast.current=null;
+        mode.current='idle';
+        if(zoom.current.scale<=1.015)resetImageZoom();
+      }
+      return;
+    }
+
+    if(mode.current==='pan'){
+      if(pointers.current.size===0){mode.current='idle';panLast.current=null;}
+      return;
+    }
+
+    if(mode.current!=='swipe'){
+      if(pointers.current.size===0)mode.current='idle';
+      return;
+    }
+
     const dx=dragX.current;
-    const elapsed=Math.max(1,performance.now()-start.current.t);
+    const elapsed=Math.max(1,performance.now()-swipeStart.current.t);
     const velocity=Math.abs(dx)/elapsed;
-    const width=cardRef.current?.getBoundingClientRect().width||360;
-    const threshold=Math.min(34,width*.09);
-    const flick=Math.abs(dx)>=14&&velocity>=.14;
+    const threshold=26;
+    const flick=Math.abs(dx)>=10&&velocity>=.11;
+
     if(dx>=threshold||(flick&&dx>0))fly('keep');
     else if(dx<=-threshold||(flick&&dx<0))fly('trash');
     else{
       const card=cardRef.current;
-      if(card){card.style.transition='transform 150ms cubic-bezier(.2,.8,.25,1)';card.style.transform='translate3d(0,0,0) rotate(0deg)';}
+      if(card){
+        card.style.transition='transform 115ms cubic-bezier(.2,.8,.25,1)';
+        card.style.transform='translate3d(0,0,0) rotate(0deg)';
+      }
       if(keepStampRef.current)keepStampRef.current.style.opacity='0';
       if(trashStampRef.current)trashStampRef.current.style.opacity='0';
       dragX.current=0;
+      mode.current='idle';
     }
   }
 
@@ -285,22 +350,24 @@ export default function Review(){
           <div className="photoReal reviewHd"><img src={preview(next)} alt="" draggable={false}/></div>
           <div className="photoMeta"><div><strong>{next.date?new Date(next.date).toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'numeric'}):'Sin fecha'}</strong></div></div>
         </article>}
-        <article ref={cardRef} className="photoCard swipeFast activeSwipeCard"
+
+        <article ref={cardRef} className="photoCard swipeFast activeSwipeCard pinchSwipeCard"
           onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
-          <div className="photoReal reviewHd">
-            <img key={itemKey(current)} src={preview(current)} alt={current.name} draggable={false} fetchPriority="high" decoding="async"/>
+          <div className="photoReal reviewHd inlinePinchStage">
+            <img ref={imageRef} key={itemKey(current)} src={preview(current)} alt={current.name} draggable={false} fetchPriority="high" decoding="async"/>
             <span className="qualityBadge">HD</span>
-            {kind==='image'&&<button className="originalButton" onPointerDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();setZoomItem(current);}}><Maximize2 size={14}/> Zoom</button>}
+            <span className="pinchHint">2 dedos = zoom</span>
           </div>
+
           <div ref={keepStampRef} className="stamp keepStamp gestureStamp">CONSERVAR</div>
           <div ref={trashStampRef} className="stamp trashStamp gestureStamp">DESCARTAR</div>
+
           <div className="photoMeta"><div><strong>{current.date?new Date(current.date).toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'numeric'}):'Sin fecha'}</strong><span>{current.name}</span></div><small>{current.account}</small></div>
         </article>
       </section>
-      <p className="hint">Un gesto corto alcanza: ← descartar · conservar →</p>
+
+      <p className="hint">1 dedo: swipe corto · 2 dedos: ampliar · con zoom: 1 dedo mueve</p>
       <section className="decisionBar"><button className="trashBtn" onClick={()=>fly('trash')}><X/></button><button className="keepBtn" onClick={()=>fly('keep')}><Check/></button></section>
     </>:<section className="doneCard"><Check/><h2>Selección terminada</h2><p>{counts.keep} conservadas · {counts.trash} descartadas.</p><Link className="primary" href="/albums">Volver a álbumes</Link></section>}
-
-    {zoomItem&&<ZoomViewer item={zoomItem} preview={preview(zoomItem)} original={original(zoomItem)} onClose={()=>setZoomItem(null)}/>}
   </main>;
 }
